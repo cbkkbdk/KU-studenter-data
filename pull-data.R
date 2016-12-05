@@ -1,146 +1,102 @@
-#De nødvendige biblioteker
+#Script for harvesting data on faculty and students at University of Copenhagen
+#To provide basis for test for representativity in our user satisfaction surveys.
+#just the latest - but can easily be modified for 2015 and 2014.
+#Before that: No gendered data.
+#
+#Necessary libraries
 library(RCurl)
 library(XML)
 library(rvest)
+library(pdftools) #Yeah, pdftables would probably be easier to work with.
+require(stringr)
 
-#Hvor ligger tingene:
-personale_tal_url <- 'http://tal.ku.dk/c_personale/'
-stud_tal_url <- 'http://us.ku.dk/studiestatistik/studiestatistikker/bestand/KU_BESTAND_2016.pdf'
 
-#Henter den rå side med tal for personale
-pers_tal_raw <- read_html(personale_tal_url)
+#Where are the data:
+faculty_numbers_url <- 'http://tal.ku.dk/c_personale/'
+stud_numbers_url <- 'http://us.ku.dk/studiestatistik/studiestatistikker/bestand/KU_BESTAND_2016.pdf'
 
-#Trækker de relevante tekststrenge ud:
-pers_tal <- html_nodes(pers_tal_raw,"div") %>%
+#First current data for faculty (and other staff)
+
+#Read the page with numbers on staff
+pers_numbers_raw <- read_html(faculty_numbers_url)
+
+#Get the relevant strings from the file
+pers_num <- html_nodes(pers_numbers_raw,"div") %>%
   html_nodes("table") %>%
   html_nodes("strong") %>%
   html_text
 
-#Og så de helt rigtige af dem:
-VIP <- pers_tal[2]
-DVIP <- pers_tal[4]
-TAP <- pers_tal[6]
+#and now the precise strings:
+VIP <- pers_num[2]
+DVIP <- pers_num[4]
+TAP <- pers_num[6]
 
-#Vi fjerner et kedeligt punktum midt i det hele:
+#get rid of a punctuation mark
 VIP <- gsub('\\.','',VIP)
 DVIP <- gsub('\\.','',DVIP)
 TAP <- gsub('\\.','',TAP)
 
-#Og konverterer det fra tekst til tal:
+#Convert from string to numeric
 VIP <- as.numeric(VIP)
 DVIP <- as.numeric(DVIP)
 TAP <- as.numeric(TAP)
 
-#Herefter er det trivielt at finde ud af om fordelingen af personaletyper blandt vores 
-#respondenter er repræsentativ.
+#Collect all three numbers in a dataframe
+staff_data <- data.frame(VIP=VIP, DVIP=DVIP, TAP=TAP)
 
-#Og så til de studerende. KU er nogle snøbler. De har lagt tallene i en pdf. 
-#Så den skal vi starte med at have ekstraheret.
+#save it - and attach a time-stamp
+#I have no idea about the update-frequency. But it could be interesting to get a time-series on this
+saveRDS(staff_data, file=paste("staff_data ",gsub(":", ".", date()),".RDA", sep=""))
 
-#Vi introducerer dette bibliotek:
-library(pdftools)
+#And now for the students. The university saves the data in a pdf. Bloody annoying.
+#But that won't keep us away
 
-#Så downloader vi filen
-download.file(stud_tal_url, "destfile.pdf", mode="wb")
+#let's start by downloading the file:
+download.file(stud_numbers_url, "destfile.pdf", mode="wb")
 
-#Og konverterer den til text. 
+#Convert it to text:
 txt <- pdf_text("destfile.pdf")
 
-#vi får det ud som en masse skrammel. Men. Hver linie i tabellen afsluttes med \r\n.
+class(txt)
+#Every line in the table ends with \r\n.
+#And I get a vector with five very long strings.
+#Lets concatenate them in to one large character thingamajig
 
-lines <- strsplit(txt[1],"\r\n")
-
-#Nej hvor ser det pænt ud!
-
-# I første omgang er vi egentlig bare interesseret i fordelingen mellem kønnene. 
-#Men egentlig kan vi jo ligeså godt trække det hele ud. Det kan være vi kan bruge det til
-#noget andet.
-#Det vi derfor har brug for er: Hum, bac, arabisk, 34, 16, 50
-
-#lad os starte med at samle de enkelte linier.
+lines <- NULL
 
 for(i in 1:length(txt)){
   lines[i] <- strsplit(txt[i], "\r\n")
 }
 
-linier <- unlist(lines, recursive=FALSE)
-str(linier)
-linier <- as.list(linier)
-str(linier)
-linier[1] <- NULL
+lines <- unlist(lines, recursive=FALSE)
 
+lines <- as.list(linier)
 
-linier[1]
+#Nice!
 
-#Nu har jeg alle linierne i en variabel. Så skal de skilles ad...
-#Den første linie er uinteressant.
-#De næste tre kan jeg bruge som test på at jeg får de rigtige resultater senere.
-#og til at øve mig på.
+#lets get rid of the first line
 
+lines[1] <- NULL
 
-#Den skal vi have splittet op. linierne er karakteriseret af at der er en tekststreng.
-#Så kommer der nogen tal, der også ligger som tekststrenge
-#De er adskilt af mellemrum.
-#Så vi skal bruge nogen regulære udtryk.
-#Vi skal nok starte med at kunne finde positionen af et tal.
-#Og endelig skal vi have fjernet punktummer. det så vi ovenfor hvordan man gjorde
+#Each line begins with a string, then a lot of whitespace, and then three numbers, separated by whitespace
+#but saved as characters.
 
-#Alt det skriver vi en funktion til at håndtere. Og det er vist bedst at den pakkes væk
-#i en funktion, for den er satme ikke køn.
-datafunktion <- function(test_linie){
-  regexp <- "([[:digit:]])"
-  regexpr(pattern = regexp, test_linie)[1]
-  teksten <- substr(test_linie,1 , regexpr(pattern = regexp, test_linie)[1]-1)
-  resten <- substr(test_linie, regexpr(pattern = regexp, test_linie)[1], nchar(test_linie))
-  resten <- gsub('\\.','',resten)
-  reg2 <- "([[:blank:]])+"
-  noget <- strsplit(resten, reg2)
-  noget[[1]][2] 
-  result <- list(teksten, noget[[1]][1], noget[[1]][2], noget[[1]][3])
+#this function splits the string. It's not beautiful. But it works.
+
+getNumbers <- function(line){
+  regexp1 <- "([[:digit:]])" #A regular expression that finds digits. The text is terminated by a digit
+  theText <- substr(line,1 , regexpr(pattern = regexp1, line)[1]-1)  #Locating the position of first digit.
+  theRest <- substr(line, regexpr(pattern = regexp1, line)[1], nchar(line)) #taking the rest
+  theRest <- gsub('\\.','',theRest)  #removing punctuation in the rest
+  regexp2 <- "([[:blank:]])+"  #Splitting by blank characters
+  some <- strsplit(theRest, regexp2) #splitting the rest by blank characters
+  result <- list(theText, some[[1]][1], some[[1]][2], some[[1]][3]) #returning the result.
   return(result)
 }
 
-#anyways, nu får jeg fire ting ud. Teksten, antallet af kvinder, antallet af mænd. Og summen.
-total_stud_kvinder <- datafunktion(linier[1])[2]
-total_stud_male    <- datafunktion(linier[1])[3]
-total_stud <- as.numeric(total_stud_kvinder) + as.numeric(total_stud_male)
+#I will need to be able to recognize if the string contains some words:
+#Fakultet (faculty), Bachelor and Kandidat (masters degree)
 
-total_bac_kvinder <- datafunktion(linier[2])[2]
-total_bac_male    <- datafunktion(linier[2])[3]
-total_bac <- as.numeric(total_stud_kvinder) + as.numeric(total_stud_male)
-
-total_cand_kvinder <- datafunktion(linier[3])[2]
-total_cand_male    <- datafunktion(linier[3])[3]
-total_cand <- as.numeric(total_stud_kvinder) + as.numeric(total_stud_male)
-
-
-#Så vil jeg godt af med de første tre linier, og de sidste tre.
-
-udsnit <- linier[4:(length(linier)-3)]
-
-udsnit <- linier
-
-#OK. Nu vil jeg så gå dem igennem linie for linie.
-#Jeg vil lave en tabel med følgende struktur:
-#streng1   streng2  streng3  talK talM talT
-#Når jeg kommer til en linie, ser jeg om den indeholder strengen "fakultet". Hvis den gør
-#det, sættes streng1 = tekststregen.
-#Hvis den indeholder strengen "bachelor", sættes streng2 = bachelor
-#Hvis den indeholder strengen "kandidat", sættes streng2 = kandidat
-#Herefter skrives der følgende til tabellen:
-#De ovenfor definerede streng1 og streng2. Streng3 er lig tekststrengen. tallene giver sig selv.
-
-#For hver linie
-#hvis fakultet indgår i teksten, streng1 = teksten. Ellers uændret
-#Hvis bachelor indgår i teksten, streng2 = bachelor. Ellers uændret
-#hvis kandidat indgår i teksten, streng2 = kandidat. Ellers uændret
-
-#vær her obs på, at det skal være kandidat med stort K. Faktisk at strengen, trimmet,
-#skal være præcist bachelor eller kandidat med stort b eller k.
-#Der er en uddannelse der hedder noget med kandiat nemlig.
-
-
-#Tre funktioner kunne være nyttige.
 
 test_fak <- function(streng){
   regexp = "(Fakultet)"
@@ -160,46 +116,64 @@ test_cand <- function(streng){
   return(result)
 }
 
-tallene <- data.frame("Fakultet" = character(), Niveau = character(), Fag = character(), Kvinder = numeric(), Maend = numeric(), Total = numeric(), stringsAsFactors=FALSE)
-colnames(tallene) <- c("Fakultet", "Niveau", "Fag", "Kvinder", "Maend", "Total")
+#Making a dataframe to keep the results of all this:
+theNumbers <- data.frame("Fakultet" = character(), Level = character(), Subj = character(), Female = numeric(), Male = numeric(), Total = numeric(), stringsAsFactors=FALSE)
+colnames(theNumbers) <- c("Fakultet", "Level", "Subject", "Female", "Male", "Total")
 
 
-niveau <- "Bachelor"
-fakultet <- "Hele KU"
-require(stringr)
+#the structure is so, that first I get a faculty name, with the relevant total numbers.
+#Then I get the level (bachelor/master), with the relevant total numbers
+#after that, I get all the individual programmes from the aforementioned faculty, and level.
+#I'll get to a new level, but with the same faculty name.
+#And then I'll get to a new faculty, with total numbers.
+#I'll need to initialize two variables:
 
-for(i in 1:length(udsnit)){
-  if(test_fak(datafunktion(udsnit[i])[1])){
-    fakultet <- str_trim(datafunktion(udsnit[i])[1])
+level <- "Bachelor"
+depart <- "Hele KU"
+
+#And then, these lines do the magic!
+for(i in 1:length(lines)){
+  if(test_fak(getNumbers(lines[i])[1])){
+    depart <- str_trim(getNumbers(lines[i])[1])
   }
-  if(test_bac(datafunktion(udsnit[i])[1])){
-    niveau <- "Bachelor"
+  if(test_bac(getNumbers(lines[i])[1])){
+    level <- "Bachelor"
   }
-  else if(test_cand(datafunktion(udsnit[i])[1])){
-    niveau <- "Kandidat"
+  else if(test_cand(getNumbers(lines[i])[1])){
+    level <- "Kandidat"
   }
-  fag <- str_trim(datafunktion(udsnit[i])[1])
-  hun <- as.numeric(datafunktion(udsnit[i])[2])
-  han <- as.numeric(datafunktion(udsnit[i])[3])
-  tot <- as.numeric(datafunktion(udsnit[i])[4])
+  subj <- str_trim(getNumbers(lines[i])[1])
+  hun <- as.numeric(getNumbers(lines[i])[2])
+  han <- as.numeric(getNumbers(lines[i])[3])
+  tot <- as.numeric(getNumbers(lines[i])[4])
   
-  if(identical(fag, fakultet)) {
-    fag <- "Alle"
-    niveau <- "Alle"
+  if(identical(subj, depart)) {
+    subj <- "Alle"
+    level <- "Alle"
   }
-  if(identical(niveau,fag)){
-    fag <- "Alle"
+  if(identical(level,subj)){
+    subj <- "Alle"
   }
   
-  tallene[nrow(tallene)+1,] <- list(fakultet,niveau,fag,hun,han,tot)
+  theNumbers[nrow(theNumbers)+1,] <- list(depart,level,subj,hun,han,tot)
 }
 
-str(hun)
-str(tallene)
-#rasghu! tallene bliver nu til strenge...
-
-#Hvis teksten indeholder strengen "fakultet", så starter vi med et ny fakultet
 
 
-View(tallene)
-#Nice. Nu er jeg tæt på. Jeg skal blot håndtere overgangene.
+#Nice. That got me pretty close. I need to handle the first three lines.
+#It could probably be done by code. But by hand is faster.
+theNumbers[1,]$Level <- "Alle"
+theNumbers[1,]$Subject <- "Alle"
+theNumbers[2,]$Level <- "Bachelor"
+theNumbers[2,]$Subject <- "Alle"
+theNumbers[3,]$Level <- "Kandidat"
+theNumbers[3,]$Subject <- "Alle"
+
+#Almost done! I just need to get rid of the last three lines
+theNumbers <- theNumbers[-c(257, 258, 259), ]
+
+
+View(theNumbers)
+#And now I'm actually done!
+#Save the data:
+saveRDS(theNumbers, file="KU_stud_numbers_2016.RDA")
