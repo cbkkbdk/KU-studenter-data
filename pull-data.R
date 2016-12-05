@@ -158,7 +158,7 @@ for(i in 1:length(lines)){
   theNumbers[nrow(theNumbers)+1,] <- list(depart,level,subj,hun,han,tot)
 }
 
-
+#Hm...
 
 #Nice. That got me pretty close. I need to handle the first three lines.
 #It could probably be done by code. But by hand is faster.
